@@ -1,61 +1,77 @@
-# Demo Devices Template
+# Deako
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Brings **Deako smart switches and dimmers** into Gladys through the local API of
+the **Deako Connect**, without account nor cloud: on / off and brightness, and
+the changes made at the wall or in the Deako app shown at once.
 
-## What you get
+> Never tested with a real device: tell us on the forum how it goes. Not
+> affiliated with Deako.
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+## Before you start
+
+- Your switches are set up with the Deako app and a **Deako Connect** (or a
+  Deako switch serving as the bridge) is on your network. The newest Deako
+  switches have no local API: they cannot be reached this way.
+- Give the Connect a fixed IP address in your router. It announces itself on
+  the network as the service `local-integration` (`_telnet._tcp`); your router
+  shows its address too.
 
 ## Configuration
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+1. **Address of the Deako Connect**: its IP address (or name), with `:port`
+   only if it is not 23.
+2. **Full read every**: how often the whole list of devices is read again (60 s
+   by default, 30 s at least). The changes come at once in between (the
+   Connect pushes them).
+3. Save, then open **Discover**: each switch and dimmer is listed with its name
+   in the Deako app. Add the ones you want.
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+**Test the connection** opens the connection if it is closed (at most every
+10 s) and checks that the Connect answers.
 
-## Actions
+## Devices
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+| Deako device | Features                                      |
+| ------------ | --------------------------------------------- |
+| Switch       | Power (0 / 1)                                 |
+| Dimmer       | Power (0 / 1), brightness (0 to 100, 0 = off) |
 
-## Scenes
+## How commands are sent
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+- One message at a time, 800 ms apart (as Deako asks). A command is done once
+  the Connect shows the new state; otherwise its message says why ("sent,
+  without confirmation", "refused by the Connect"…), and the devices are read
+  again 5 s later.
+- A scene on many lights sets every light: the commands wait in line (30 s at
+  most), those of one device merged. Gladys gets its answer within 3.5 s: a
+  command still in line then says "waiting in line" and still leaves.
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Turning off (Off)
 
-## Dashboard
+An Off (power 0, or brightness 0) needs no option and goes first: before the
+commands waiting (it cancels those of the same device), without the 800 ms gap,
+cutting a request that has had no answer for 1 s, even before the
+configuration is read (to the address of the last session).
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+When it cannot leave (the Connect does not answer), it is **kept** (also across
+a restart) and sent again every 10 s and as soon as the connection is back. It
+ends once the device shows it off, when a newer command of that device leaves,
+or when the device is deleted.
+
+An Off is refused only when the address of the Connect is not known (none typed
+and none from a previous session), or replaced by a newer click on the same
+device before it left. Once the Connect has answered it 4 times
+(accepted or refused, "busy" not counted) without the device showing it off, it
+is no longer sent again by itself: the status says so; click Off again.
+
+## Status
+
+The Configuration page shows the connection, the number of devices, the
+devices to add, and every Off held.
 
 ## Troubleshooting
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+- "unreachable": check the address and that the Connect is on the same network
+  as Gladys; new tries after 5 or 15 s, then 30 s, 1, 2, then every 5 minutes.
+- Nothing in Discover: check in the Deako app that the switches belong to the
+  profile of this Connect.

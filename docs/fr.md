@@ -1,67 +1,80 @@
-# Template de démonstration
+# Deako
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Intègre à Gladys les **interrupteurs et variateurs connectés Deako** par l’API
+locale du **Deako Connect**, sans compte ni cloud : marche / arrêt et intensité,
+et les changements faits au mur ou dans l’application Deako affichés aussitôt.
 
-## Ce que vous obtenez
+> Jamais testé avec un vrai appareil : dites-nous sur le forum comment ça se
+> passe. Sans lien avec Deako.
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+## Avant de commencer
+
+- Vos interrupteurs sont installés avec l’application Deako et un **Deako
+  Connect** (ou un interrupteur Deako qui sert de passerelle) est sur votre
+  réseau. Les interrupteurs Deako les plus récents n’ont pas d’API locale : ils
+  ne sont pas joignables ainsi.
+- Donnez au Connect une adresse IP fixe dans votre box. Il s’annonce sur le
+  réseau comme le service `local-integration` (`_telnet._tcp`) ; votre box
+  affiche aussi son adresse.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+1. **Adresse du Deako Connect** : son adresse IP (ou son nom), avec `:port`
+   seulement si ce n’est pas le 23.
+2. **Lecture complète toutes les** : fréquence de relecture de toute la liste
+   des appareils (60 s par défaut, 30 s au moins). Les changements arrivent
+   aussitôt entre deux (le Connect les envoie).
+3. Enregistrez, puis ouvrez **Découverte** : chaque interrupteur et variateur y
+   est listé avec son nom dans l’application Deako. Ajoutez ceux que vous
+   voulez.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+**Tester la connexion** ouvre la connexion si elle est fermée (au plus toutes
+les 10 s) et vérifie que le Connect répond.
 
-## Actions
+## Appareils
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+| Appareil Deako | Fonctionnalités                                   |
+| -------------- | ------------------------------------------------- |
+| Interrupteur   | Allumage (0 / 1)                                  |
+| Variateur      | Allumage (0 / 1), intensité (0 à 100, 0 = éteint) |
 
-## Scènes
+## Envoi des commandes
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+- Un message à la fois, à 800 ms d’écart (comme Deako le demande). Une commande
+  est faite quand le Connect montre le nouvel état ; sinon son message dit
+  pourquoi (« envoyée, sans confirmation », « refusée par le Connect »…), et
+  les appareils sont relus 5 s plus tard.
+- Une scène sur plusieurs lumières les règle toutes : les commandes attendent
+  en file (30 s au plus), celles d’un même appareil fusionnées. Gladys reçoit
+  sa réponse sous 3,5 s : une commande encore en file dit alors « en file » et
+  part quand même.
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Extinction (arrêt)
 
-## Tableau de bord
+Un arrêt (allumage 0, ou intensité 0) ne demande aucune option et passe en
+premier : avant les commandes en attente (il annule celles du même appareil),
+sans l’écart de 800 ms, en coupant une requête restée 1 s sans réponse, même
+avant la lecture de la configuration (vers l’adresse de la dernière session).
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+S’il ne peut pas partir (le Connect ne répond pas), il est **gardé** (même après
+un redémarrage) et renvoyé toutes les 10 s et dès le retour de la connexion. Il
+prend fin quand l’appareil se montre éteint, quand une commande plus récente de
+cet appareil part, ou quand l’appareil est supprimé.
 
-## Dépannage
+Un arrêt n’est refusé que si l’adresse du Connect n’est pas connue (aucune
+saisie, aucune d’une session précédente), ou remplacé par un clic plus récent
+sur le même appareil avant de partir. Quand le Connect y a répondu 4 fois
+(accepté ou refusé, « occupé » non compté) sans que l’appareil se montre éteint,
+il n’est plus renvoyé de lui-même : le statut le dit ; recliquez sur Arrêt.
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+## Statut
+
+La page Configuration montre la connexion, le nombre d’appareils, ceux à
+ajouter et chaque arrêt gardé.
+
+## En cas de problème
+
+- « injoignable » : vérifiez l’adresse et que le Connect est sur le même réseau
+  que Gladys ; nouveaux essais après 5 ou 15 s, puis 30 s, 1, 2, puis toutes les 5 minutes.
+- Rien dans Découverte : vérifiez dans l’application Deako que les
+  interrupteurs appartiennent au profil de ce Connect.
