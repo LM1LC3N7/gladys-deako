@@ -61,7 +61,10 @@ only connection), it is **kept** (also across a restart) and sent again every
 10 s (one sent without an answer: 10 s after that send), at once when a
 connection opens for another command if it was never sent, and all at once when
 the Connect answers again. After connections closed at once or without a byte,
-the next one waits 1 s, then 2, 4, 8, up to 10 s. Accepted by the
+the next automatic one (a resend, a reconnection) waits 1 s, then 2, 4, 8, up to
+10 s; a click (an Off, a command, **Test the connection**) does not wait: its
+connection is tried at once (one per click, one per second at most), and an Off
+that still cannot leave is retried within about 1 s, then kept. Accepted by the
 Connect, it is checked by a read 5 s later and sent again 10 s after its last
 send if that read still shows the device on. It ends once the device shows it
 off, when the device is turned on again at the wall or in the app (never undone),

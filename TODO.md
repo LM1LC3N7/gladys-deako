@@ -32,6 +32,17 @@ Handoff document: what is done, what was decided, what comes next.
       and 5 Offs held against a taken slot and a silent Connect
       (`test/review2.test.js`).
 
+- [x] **Review r3** (2026-11-06): REFUSÉ (R1 important, R2 mineur); fixed: the
+      pause after dead connections is for the automatic connections only (the
+      line opening again, the probe, a reconnection); a click (the first send of
+      an Off, a command, the test button) ends it: one immediate connection per
+      click, one per second at most, a try in progress or an open connection
+      serves it; the requests left by a failed try and the retries of an Off
+      keep it, and an Off whose next try would wait more than 1 s is kept at
+      once (R1). A stop ends the pause, the wait for a
+      close, the waits for an EVENT and for the configuration: no timer left
+      (R2). Tests in `test/review3.test.js`.
+
 ## Decisions
 
 - Version 0.1.0 set by hand (package.json, lock, manifest, docker_image).
@@ -46,10 +57,12 @@ Handoff document: what is done, what was decided, what comes next.
   for 1 s is cut when another Off waits behind it.
 - Only an Off or a command opens a connection; reads and pings waiting fail when
   it closes. The reconnection timer leaves the held Offs to the probe (every
-  10 s). After connections that never got a byte, the next one waits 1 s,
-  doubled up to 10 s (an Off included); an Off sent without an answer goes again
-  10 s after that send at the earliest, and all the held Offs go at once when
-  the Connect answers a request again.
+  10 s). After connections that never got an answer, the next automatic one
+  waits 1 s, doubled up to 10 s; a click (the first send of an Off, a command,
+  the test button) skips that pause once, one per second at most (a scene skips it once, its
+  requests left by a failed try wait for it). An Off sent without an answer goes
+  again 10 s after that send at the earliest, and all the held Offs go at once
+  when the Connect answers a request again.
 - An EVENT after the "ok" of an Off ends its guard: off = done; on = turned on
   at the wall or in the app after the Off, never undone. Only a read that left
   2 s after the "ok", no EVENT since, showing on, sends it again.

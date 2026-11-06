@@ -17,7 +17,9 @@
 // connection, the configuration not read (the address in /data), a device not
 // listed yet. Clicked, an Off cancels the commands of that device still
 // waiting, has no deadline to leave (its ack comes by 4.3 s, "in line" when
-// still queued), is tried again for 250 ms, then kept (a guard, in /data):
+// still queued), skips the pause after dead connections on its first send
+// (one connection per click, src/link.js), is tried again for 250 ms unless
+// the next try is more than 1 s away, then kept (a guard, in /data):
 //   - not sent, or sent without an answer (no answer, cut, DEVICE_BUSY): sent
 //     again every 10 s (the probe, which also opens the connection) and as
 //     soon as a connection opens, never given up;
@@ -320,6 +322,9 @@ export class App {
       if (this[name] !== undefined) this.timers.clearTimeout(this[name]);
       this[name] = undefined;
     }
+    // No timer left after a stop: the waits for an EVENT and for the configuration end now.
+    for (const set of [...this.watchers.values()]) for (const watcher of [...set]) watcher.end();
+    for (const done of [...this.readyWaiters]) done(false);
     this.dropLink();
   }
 
@@ -914,6 +919,8 @@ export class App {
           last = state;
           if (test(state)) end({ done: true, last });
         },
+        /** At stop: no timer left. */
+        end: () => end({ done: false, last }),
       };
       set.add(watcher);
       const timer = this.timers.setTimeout(
@@ -1061,9 +1068,10 @@ export class App {
   /**
    * Sends the Off of `guard` (power false), protective. Resolves with the "ok" answer; rejects
    * with the LinkError (`sent` tells whether it left). A send counts as a try only once the
-   * Connect answered it (ok, or an error but DEVICE_BUSY).
+   * Connect answered it (ok, or an error but DEVICE_BUSY). `hurry`: the first send of a click,
+   * whose connection skips the pause after dead connections (src/link.js).
    */
-  sendGuard(guard) {
+  sendGuard(guard, { hurry = false } = {}) {
     const link = this.link;
     if (!link) return Promise.reject(new LinkError('network', { detail: 'no address' }));
     // One send of a guard at a time.
@@ -1080,6 +1088,7 @@ export class App {
         // Offs); only its answer is awaited TIMINGS.commandTimeout once it left.
         deadline: Infinity,
         timeout: TIMINGS.commandTimeout,
+        hurry,
         beforeSend: () => {
           // A newer click on this device took its place: nothing leaves after it.
           if (this.guards.get(id) !== guard) throw new LinkError('late', { detail: 'superseded' });
@@ -1171,8 +1180,10 @@ export class App {
     const first = this.monotonic();
     let lastError;
     let queued = false;
-    for (;;) {
-      const sent = this.sendGuard(guard).then(
+    for (let attempt = 0; ; attempt += 1) {
+      // Only the first send of the click skips the pause after dead connections: one immediate
+      // connection per click.
+      const sent = this.sendGuard(guard, { hurry: attempt === 0 }).then(
         () => ({}),
         (error) => ({ error }),
       );
@@ -1200,7 +1211,10 @@ export class App {
         lastError.sent ||
         this.guards.get(id) !== guard ||
         mono - first >= TIMINGS.protectiveRetry ||
-        this.stopped
+        this.stopped ||
+        // The Connect not reached for a while: the next try waits more than 1 s (pause after dead
+        // connections, up to 10 s); kept now, never "in line" for that pause.
+        this.link?.reopenWait(mono) > TIMINGS.reopenFirst
       ) {
         break;
       }
@@ -1325,6 +1339,8 @@ export class App {
         tag: id,
         deadline: received + TIMINGS.commandMaxAge,
         timeout: TIMINGS.commandTimeout,
+        // A click: its connection skips the pause after dead connections (src/link.js).
+        hurry: true,
         beforeSend: () => {
           // (An Off of the device clicked meanwhile removed this request from the line: see
           // cancelCommands; a request older than 30 s is dropped by the line, unsent.)
@@ -1562,7 +1578,8 @@ export class App {
       this.lastTestAt = mono;
       this.clearReconnect();
       try {
-        await this.link.open(started + TIMINGS.testBudget);
+        // A click: the pause after dead connections does not apply (10 s apart at most).
+        await this.link.open(started + TIMINGS.testBudget, { hurry: true });
       } catch (err) {
         return word(T.test.failed(address, reasonOf(err)), lang);
       }

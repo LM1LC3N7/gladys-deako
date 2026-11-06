@@ -14,6 +14,9 @@
 //   connections at once). A cut is "left, without answer", never "not sent".
 // - Only an Off or a command opens a connection; a read or a ping waiting
 //   fails when there is none (the app opens connections, with its pauses).
+// - After connections that never got an answer, the automatic ones (the line
+//   opening again, the probe, a reconnection) wait 1 s doubled up to 10 s; a
+//   click (`hurry`) skips that wait once, one such skip per second at most.
 // - Lines are LIMITS.lineBytes at most: a longer one closes the connection.
 // - `beforeSend` runs right before the first byte of a request, on an open
 //   connection; it may throw (nothing sent). `onSent` runs once it is written.
@@ -80,6 +83,14 @@ export class DeakoLink {
     /** Connections in a row that never got a byte, and when the last one was tried. */
     this.deadStreak = 0;
     this.lastConnectAt = -Infinity;
+    /** The wait before a connection in progress ({ timer, resolve }), and a try in progress. */
+    this.backoff = undefined;
+    this.trying = false;
+    /** A click waiting for its connection (monotonic), and the last try that served one. */
+    this.clickAt = -Infinity;
+    this.clickTryAt = -Infinity;
+    /** The wait for the old connection to close ({ timer, resolve }). */
+    this.closeWait = undefined;
     this.connSeq = 0;
     this.queue = [];
     this.inFlight = undefined;
@@ -98,10 +109,14 @@ export class DeakoLink {
 
   // --- Connection ------------------------------------------------------------
 
-  /** Opens the connection (shared), bounded by TIMINGS.connectTimeout and `deadline`. */
-  open(deadline = Infinity) {
+  /**
+   * Opens the connection (shared), bounded by TIMINGS.connectTimeout and `deadline`; `hurry`:
+   * asked by a click (the "Test the connection" button), see `hurry`.
+   */
+  open(deadline = Infinity, { hurry = false } = {}) {
     if (this.stopped) return Promise.reject(new LinkError('stopped'));
     if (this.isOpen) return Promise.resolve(this.conn);
+    if (hurry) this.hurry(this.monotonic());
     if (!this.opening) {
       this.opening = this.connectNow().finally(() => {
         this.opening = undefined;
@@ -125,21 +140,74 @@ export class DeakoLink {
   /** The old connection closed first (its 'close' seen, 200 ms at most), then a new one. */
   async connectNow() {
     if (this.closing) await this.closing;
-    // After connections that never got a byte (refused, closed at once: the single slot of the
-    // Connect held by another client, or a silent Connect), the next one waits 1 s, then 2, 4,
-    // 8, up to 10 s, from the last try: whatever asks for it, an Off included.
-    const wait = this.reopenWait();
-    if (wait > 0) await new Promise((resolve) => this.timers.setTimeout(resolve, wait));
-    if (this.stopped) throw new LinkError('stopped');
-    this.lastConnectAt = this.monotonic();
-    return this.connectSocket();
+    for (;;) {
+      if (this.stopped) throw new LinkError('stopped');
+      const mono = this.monotonic();
+      const wait = this.connectWait(mono);
+      if (wait <= 0) {
+        // This try serves the click waiting, if any: the next click skips the pause 1 s later.
+        if (this.clicked(mono)) this.clickTryAt = mono;
+        this.clickAt = -Infinity;
+        this.lastConnectAt = mono;
+        break;
+      }
+      // Ended early by a click (hurry) or a stop; the wait is computed again.
+      await new Promise((resolve) => {
+        this.backoff = { resolve, timer: this.timers.setTimeout(() => this.endBackoff(), wait) };
+      });
+    }
+    this.trying = true;
+    try {
+      return await this.connectSocket();
+    } finally {
+      this.trying = false;
+    }
   }
 
-  /** The wait before the next connection (ms): 0 after a connection that got bytes. */
-  reopenWait() {
+  /**
+   * The wait before the next connection (ms), `mono` read once. After connections that never got
+   * an answer (refused, closed at once: the single slot of the Connect held by another client, or
+   * a silent Connect), an automatic one (the line opening again, the probe, a reconnection) waits
+   * 1 s, then 2, 4, 8, up to 10 s from the last try. A click waiting goes at once, 1 s after the
+   * last try that served a click at the earliest (a human's pace, never a loop).
+   */
+  connectWait(mono) {
+    const wait = this.reopenWait(mono);
+    if (wait <= 0 || !this.clicked(mono)) return wait;
+    return Math.min(wait, Math.max(0, this.clickTryAt + TIMINGS.reopenFirst - mono));
+  }
+
+  /** The pause after dead connections still to wait (ms): 0 after a connection that got bytes. */
+  reopenWait(mono = this.monotonic()) {
     if (this.deadStreak === 0) return 0;
     const pause = Math.min(TIMINGS.reopenFirst * 2 ** (this.deadStreak - 1), TIMINGS.reopenMax);
-    return Math.max(0, this.lastConnectAt + pause - this.monotonic());
+    return Math.max(0, this.lastConnectAt + pause - mono);
+  }
+
+  /** A click waits for a connection (asked less than 10 s ago, not served by a try yet). */
+  clicked(mono) {
+    return mono - this.clickAt <= TIMINGS.reopenMax;
+  }
+
+  /**
+   * A click (the first send of an Off, a command) asks for its connection now: the pause after
+   * dead connections is for the automatic tries, not for a user. A try in progress serves it;
+   * the requests left in line by a failed try never ask again (a scene does not skip the pause
+   * once per request), nor does the retry of an Off.
+   */
+  hurry(mono) {
+    // Open: the click is served by this connection; a try in progress serves it too.
+    if (this.isOpen || this.trying) return;
+    this.clickAt = mono;
+    this.endBackoff();
+  }
+
+  endBackoff() {
+    const backoff = this.backoff;
+    if (!backoff) return;
+    this.backoff = undefined;
+    this.timers.clearTimeout(backoff.timer);
+    backoff.resolve();
   }
 
   connectSocket() {
@@ -227,11 +295,12 @@ export class DeakoLink {
         resolve();
         return;
       }
-      const timer = this.timers.setTimeout(resolve, CLOSE_WAIT);
-      conn.socket.once?.('close', () => {
-        this.timers.clearTimeout(timer);
-        resolve();
-      });
+      const wait = {
+        resolve,
+        timer: this.timers.setTimeout(() => this.endCloseWait(wait), CLOSE_WAIT),
+      };
+      this.closeWait = wait;
+      conn.socket.once?.('close', () => this.endCloseWait(wait));
     }).finally(() => {
       if (this.closing === closing) this.closing = undefined;
     });
@@ -257,6 +326,12 @@ export class DeakoLink {
       this.logger?.warn?.(`deako: close handler failed (${err?.name ?? 'Error'})`);
     }
     this.pump();
+  }
+
+  endCloseWait(wait) {
+    if (this.closeWait === wait) this.closeWait = undefined;
+    this.timers.clearTimeout(wait.timer);
+    wait.resolve();
   }
 
   /** Closes the current connection (a ping without answer, a stop). */
@@ -330,11 +405,11 @@ export class DeakoLink {
   /**
    * Queues `message`; resolves with the "ok" answer. Options: priority, deadline (monotonic:
    * not sent after it, not awaited after it), timeout (the answer), beforeSend, onSent(at),
-   * onAnswer(message) (synchronous), tag (for cancel).
+   * onAnswer(message) (synchronous), tag (for cancel), hurry (a click: see `hurry`).
    */
   request(
     message,
-    { priority = PRIORITY.READ, deadline, timeout, beforeSend, onSent, onAnswer, tag } = {},
+    { priority = PRIORITY.READ, deadline, timeout, beforeSend, onSent, onAnswer, tag, hurry } = {},
   ) {
     if (this.stopped) return Promise.reject(new LinkError('stopped'));
     return new Promise((resolve, reject) => {
@@ -358,6 +433,7 @@ export class DeakoLink {
       const at = this.queue.findIndex((j) => j.priority < priority);
       if (at === -1) this.queue.push(job);
       else this.queue.splice(at, 0, job);
+      if (hurry) this.hurry(this.monotonic());
       this.pump();
       this.armCut();
     });
@@ -513,6 +589,9 @@ export class DeakoLink {
     this.timers.clearTimeout(this.gapTimer);
     this.gapTimer = undefined;
     this.clearCut();
+    // No timer left: the pause before a connection and the wait for a close end now.
+    this.endBackoff();
+    if (this.closeWait) this.endCloseWait(this.closeWait);
     for (const job of this.queue.splice(0)) job.reject(new LinkError('stopped'));
     const job = this.inFlight;
     if (job) {

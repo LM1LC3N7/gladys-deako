@@ -65,7 +65,11 @@ seule connexion), il est **gardé** (même après un redémarrage) et renvoyé t
 les 10 s (un arrêt envoyé sans réponse : 10 s après cet envoi), aussitôt quand
 une connexion s’ouvre pour une autre commande s’il n’est jamais parti, et tous
 d’un coup quand le Connect répond de nouveau. Après des connexions fermées
-aussitôt ou sans un octet, la suivante attend 1 s, puis 2, 4, 8, jusqu’à 10 s.
+aussitôt ou sans un octet, la suivante automatique (renvoi, reconnexion) attend
+1 s, puis 2, 4, 8, jusqu’à 10 s ; un clic (arrêt, commande, **Tester la
+connexion**) n’attend pas : sa connexion est essayée aussitôt (une par clic, une
+par seconde au plus), et un arrêt qui ne peut toujours pas partir est réessayé
+dans la seconde environ, puis gardé.
 Accepté par le Connect, il est vérifié par une lecture 5 s plus tard et renvoyé
 10 s après son dernier envoi si cette lecture montre encore l’appareil allumé. Il
 prend fin quand l’appareil se montre éteint, quand l’appareil est rallumé au mur
