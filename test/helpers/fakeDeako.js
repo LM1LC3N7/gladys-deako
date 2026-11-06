@@ -39,6 +39,10 @@ export function fakeDeako({ profile = PROFILE(), clock } = {}) {
     busy: 0,
     /** CONTROLs answered "ok" and not applied (no EVENT). */
     ignoreControl: false,
+    /** Devices left out of the DEVICE_LIST answer (still controllable). */
+    hidden: new Set(),
+    /** Extra DEVICE_FOUND messages appended to every list (raw `data`). */
+    extraFound: [],
     /** CONTROLs applied without an EVENT. */
     noEvent: false,
     /** A single client: a second connection is closed at once. */
@@ -51,8 +55,10 @@ export function fakeDeako({ profile = PROFILE(), clock } = {}) {
     sockets: new Set(),
     /** Connections asked by the client (refused ones included). */
     attempts: 0,
+    attemptAt: [],
     connect: () => {
       world.attempts += 1;
+      world.attemptAt.push(world.clock.monotonic());
       return openSocket(world);
     },
     /** Messages of `type` received (CONTROL, DEVICE_LIST, PING). */
@@ -155,8 +161,11 @@ function openSocket(world) {
       world.connections += 1;
       socket.id = world.connections;
       socket.emit('connect');
-      socket.closed = true;
-      world.later(() => socket.emit('close'), 1);
+      // What is written meanwhile is read (and never answered), then the slot is closed.
+      world.later(() => {
+        socket.closed = true;
+        socket.emit('close');
+      }, 1);
       return;
     }
     socket.connected = true;
@@ -183,8 +192,11 @@ function handle(world, socket, message) {
   }
   if (message.type === 'DEVICE_LIST') {
     send(() => {
-      const devices = [...world.devices.values()];
-      const answer = answerOf(message, { data: { number_of_devices: devices.length } });
+      const devices = [...world.devices.values()].filter((d) => !world.hidden.has(d.uuid));
+      const extra = world.extraFound.map((data) => ({ type: 'DEVICE_FOUND', src: 'deako', data }));
+      const answer = answerOf(message, {
+        data: { number_of_devices: devices.length + extra.length },
+      });
       // Snapshot of the states when the list is handled.
       const found = devices.map((d) => ({
         type: 'DEVICE_FOUND',
@@ -197,6 +209,7 @@ function handle(world, socket, message) {
           state: { ...d.state },
         },
       }));
+      found.push(...extra);
       if (world.foundGap === 0) {
         socket.feedRaw([answer, ...found].map((m) => `${JSON.stringify(m)}\r\n`).join(''));
         return;

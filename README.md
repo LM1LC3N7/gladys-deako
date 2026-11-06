@@ -21,7 +21,8 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (App)
 - Full read (`DEVICE_LIST`) at connection and every poll interval; `EVENT`
   messages pushed by the Connect between.
 - Commands in line, 800 ms apart (Deako API.md 1.1); Offs first, kept and sent
-  again until seen applied (see the header of `src/app.js`).
+  again every 10 s (4 answered tries at most) until seen applied; a light turned on
+  again at the wall after it is never turned off again (see the header of `src/app.js`).
 
 Protocol: [DeakoLights/local-integrations](https://github.com/DeakoLights/local-integrations)
 `API.md` 1.5 and [DeakoLights/pydeako](https://github.com/DeakoLights/pydeako) 0.6.0, both

@@ -9,9 +9,11 @@
 //   read (an EVENT right behind the "ok" of a CONTROL is after it).
 // - A request in flight with no byte received for TIMINGS.stuck is cut when a
 //   request of a higher priority waits (an Off behind a command or a read, a
-//   command behind a read): the connection is destroyed, then a new one is
-//   opened for the waiting request (never two connections at once). A cut is
-//   "left, without answer" for the request cut, never "not sent".
+//   command behind a read) or an Off waits behind a silent Off: the connection
+//   is destroyed, then a new one is opened for the waiting request (never two
+//   connections at once). A cut is "left, without answer", never "not sent".
+// - Only an Off or a command opens a connection; a read or a ping waiting
+//   fails when there is none (the app opens connections, with its pauses).
 // - Lines are LIMITS.lineBytes at most: a longer one closes the connection.
 // - `beforeSend` runs right before the first byte of a request, on an open
 //   connection; it may throw (nothing sent). `onSent` runs once it is written.
@@ -219,6 +221,11 @@ export class DeakoLink {
     } catch {
       // already gone
     }
+    // The reads and pings waiting end with the connection (never a reason to open another).
+    this.cancel(
+      (j) => j.priority === PRIORITY.READ,
+      () => new LinkError('closed', { detail: 'connection closed' }),
+    );
     const job = this.inFlight;
     if (job && job.conn === conn) {
       this.finish(job, null, new LinkError(reason === 'cut' ? 'cut' : 'closed', { sent: true }));
@@ -389,6 +396,12 @@ export class DeakoLink {
         }
       }
       if (!this.isOpen) {
+        if (job.priority === PRIORITY.READ) {
+          // A read or a ping never opens a connection: the app opens them, with its pauses.
+          this.queue.shift();
+          job.reject(new LinkError('network', { detail: 'not connected' }));
+          continue;
+        }
         try {
           await this.open(job.deadline);
         } catch (err) {
@@ -445,7 +458,11 @@ export class DeakoLink {
   armCut() {
     this.clearCut();
     const job = this.inFlight;
-    if (!job || !this.queue.some((j) => j.priority > job.priority)) return;
+    // A more urgent request waits, or another Off behind a silent Off.
+    const urgent = (j) =>
+      j.priority > job.priority ||
+      (j.priority === PRIORITY.PROTECTIVE && job.priority === PRIORITY.PROTECTIVE);
+    if (!job || !this.queue.some(urgent)) return;
     const conn = job.conn;
     const quietSince = Math.max(job.sentAt, conn.lastByteAt);
     const wait = Math.max(0, quietSince + TIMINGS.stuck - this.monotonic());

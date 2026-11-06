@@ -101,6 +101,11 @@ export const T = {
     ),
   toAdd: (n) =>
     both(`${n} device(s) to add in Discover.`, `${n} appareil(s) à ajouter dans Découverte.`),
+  guardNoAddress: (name) =>
+    both(
+      `Off of ${name}: kept, not sent (no address of the Connect).`,
+      `Arrêt de ${name} : gardé, pas envoyé (aucune adresse du Connect).`,
+    ),
   guardPending: (name) =>
     both(
       `Off of ${name}: not sent or not answered yet, kept and sent again every 10 s.`,
@@ -215,12 +220,16 @@ export const ERRORS = {
       `Off sent, refused by the Connect (${reason.en}): held, sent again in 10 s.`,
       `Arrêt envoyé, refusé par le Connect (${reason.fr}) : gardé, renvoyé dans 10 s.`,
     ),
-  offNotApplied: both(
-    'Off sent and accepted, but the device still shows on: held, sent again in 10 s.',
-    'Arrêt envoyé et accepté, mais l’appareil se montre encore allumé : gardé, renvoyé dans 10 s.',
+  offOverridden: both(
+    'Off sent and accepted, then the device was turned on again (at the wall or in the app): no longer held.',
+    'Arrêt envoyé et accepté, puis l’appareil a été rallumé (au mur ou dans l’application) : plus gardé.',
+  ),
+  offQueued: both(
+    'Off waiting in line behind other Offs: kept, it leaves as soon as the line is free.',
+    'Arrêt en file derrière d’autres arrêts : gardé, il part dès que la ligne est libre.',
   ),
   offUnconfirmed: both(
-    'Off sent, without confirmation yet: held, sent again in 10 s until the device shows it.',
-    'Arrêt envoyé, sans confirmation pour l’instant : gardé, renvoyé dans 10 s jusqu’à ce que l’appareil le montre.',
+    'Off sent, without confirmation yet: held, sent again in 10 s if it got no answer or a read still shows the device on.',
+    'Arrêt envoyé, sans confirmation pour l’instant : gardé, renvoyé dans 10 s s’il n’a pas eu de réponse ou si une lecture montre encore l’appareil allumé.',
   ),
 };

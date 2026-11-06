@@ -16,17 +16,21 @@
 // read or a command in flight (cut once stuck 1 s), the 800 ms gap, a failed
 // connection, the configuration not read (the address in /data), a device not
 // listed yet. Clicked, an Off cancels the commands of that device still
-// waiting, is tried again for 250 ms, then kept (a guard, in /data):
+// waiting, has no deadline to leave (its ack comes by 4.3 s, "in line" when
+// still queued), is tried again for 250 ms, then kept (a guard, in /data):
 //   - not sent, or sent without an answer (no answer, cut, DEVICE_BUSY): sent
-//     again every 10 s and as soon as a connection opens, never given up;
-//   - answered "ok": judged by the next EVENT of the device, or a full read
-//     that left 2 s after that answer (one is asked 5 s later): off = done,
-//     the guard ends; still on = sent again 10 s after the last send;
+//     again every 10 s (the probe, which also opens the connection) and as
+//     soon as a connection opens, never given up;
+//   - answered "ok": any EVENT of the device after that answer ends the guard
+//     (off = done; on = turned on at the wall or in the app, never undone); a
+//     full read that left 2 s after the answer, no EVENT since, showing on,
+//     sends it again 10 s after the last send (one read is asked 5 s later);
 //   - a send counts as a try only once the Connect answered it (ok or an
 //     error but DEVICE_BUSY); after 4 answered tries the Off is no longer sent
 //     again (the status says it; a new click starts again).
-// A guard ends when an EVENT or a later read shows the device off, when a
-// newer command of the device left, a newer Off, or the device is deleted.
+// A guard ends when an EVENT after its "ok" or a later read shows the device
+// off, an EVENT after its "ok" shows it on, a newer command of the device
+// left, a newer Off, or the device is deleted.
 //
 // Non-protective commands (on, brightness 1-100) leave in line, 800 ms apart
 // (API.md 1.1), those of one device merged while waiting (a scene); the ack
@@ -442,9 +446,13 @@ export class App {
     for (;;) {
       const entry = this.saving ?? this.startSave();
       const left = entry.at + TIMINGS.storeWait - this.monotonic();
-      if (left <= 0) return this.storeFailed({ code: 'timeout' });
-      const answer = await this.bounded(entry.done, left);
-      if (answer.late) return this.storeFailed({ code: 'timeout' });
+      const answer = left <= 0 ? { late: true } : await this.bounded(entry.done, left);
+      if (answer.late) {
+        // A save that never ends is left behind: the next one starts anew (fileStore writes it
+        // through a temporary file of its own), so /data is written again once it answers.
+        if (this.saving === entry) this.saving = undefined;
+        return this.storeFailed({ code: 'timeout' });
+      }
       if (entry.ticket >= ticket) {
         return answer.value === true ? this.storeWritten() : this.storeFailed(answer.value);
       }
@@ -615,6 +623,13 @@ export class App {
     this.reconnectTimer = this.timers.setTimeout(() => {
       this.reconnectTimer = undefined;
       this.reconnectAt = undefined;
+      // An Off held due: the probe (every 10 s) opens the connection for it; one opening here
+      // too would double the tries on a Connect that closes at once (its slot taken).
+      const mono = this.monotonic();
+      if ([...this.guards.values()].some((g) => this.due(g, mono))) {
+        this.scheduleReconnect();
+        return;
+      }
       this.ensureConnection();
     }, wait);
   }
@@ -716,7 +731,16 @@ export class App {
           const count = deviceCount(message.data);
           const expected = Math.min(count ?? 0, LIMITS.devices);
           this.tooMany = (count ?? 0) > LIMITS.devices;
-          this.listing = { conn, tick, sentAt, expected, received: new Set(), timer: undefined };
+          this.listing = {
+            conn,
+            tick,
+            sentAt,
+            expected,
+            received: new Set(),
+            /** DEVICE_FOUND messages of this list, unreadable ones included (its end). */
+            count: 0,
+            timer: undefined,
+          };
           if (expected === 0) {
             this.endListing();
             return;
@@ -752,6 +776,12 @@ export class App {
     this.listing = undefined;
     this.listBusy = false;
     if (listing?.timer !== undefined) this.timers.clearTimeout(listing.timer);
+    // A complete list: the devices it no longer has leave the Discover list.
+    if (listing && !this.tooMany && listing.received.size === listing.expected) {
+      for (const device of this.devices.values()) {
+        if (device.listed && !listing.received.has(device.id)) device.listed = false;
+      }
+    }
     this.publishDevices().catch(() => {});
     this.refreshStatus().catch(() => {});
     this.flush().catch(() => {});
@@ -780,12 +810,23 @@ export class App {
     else if (message.type === TYPES.EVENT) this.onEvent(conn, message.data);
   }
 
-  deviceOf(id) {
+  /**
+   * The entry of a device, made when needed (LIMITS.devices at most). A device listed by the
+   * Connect takes the place of one only seen in an EVENT (never listed, no Off held): uuids
+   * pushed by a faulty or hostile peer never keep the real devices out.
+   */
+  deviceOf(id, { listed = false } = {}) {
     let device = this.devices.get(id);
     if (!device) {
       if (this.devices.size >= LIMITS.devices) {
-        this.tooMany = true;
-        return undefined;
+        const spare = listed
+          ? [...this.devices.values()].find((d) => !d.listed && !this.guards.has(d.id))
+          : undefined;
+        if (!spare) {
+          if (listed) this.tooMany = true;
+          return undefined;
+        }
+        this.devices.delete(spare.id);
       }
       device = {
         id,
@@ -805,10 +846,15 @@ export class App {
     const listing = this.listing;
     // Outside a read of ours (or of an older connection): not ours to apply.
     if (!listing) return;
+    listing.count += 1;
     const found = parseDeviceFound(data);
-    if (!found || listing.received.has(found.id)) return;
+    // A second DEVICE_FOUND of one device in a list: the first one stands.
+    if (!found || listing.received.has(found.id)) {
+      if (listing.count >= listing.expected) this.endListing();
+      return;
+    }
     listing.received.add(found.id);
-    const device = this.deviceOf(found.id);
+    const device = this.deviceOf(found.id, { listed: true });
     if (device) {
       this.markAlive(conn);
       device.name = found.name ?? device.name;
@@ -823,7 +869,7 @@ export class App {
         this.judgeGuard(device, found.state.power, listing);
       }
     }
-    if (listing.received.size >= listing.expected) this.endListing();
+    if (listing.count >= listing.expected) this.endListing();
   }
 
   onEvent(conn, data) {
@@ -906,7 +952,7 @@ export class App {
 
   /** Due for a send: never answered "ok" (pending), or contradicted 10 s after its last send. */
   due(guard, mono) {
-    if (guard.inFlight || !this.canSend(guard)) return false;
+    if (guard.inFlight || guard.userInFlight || !this.canSend(guard)) return false;
     if (!guard.okSeen) return true;
     return guard.contradicted && mono - guard.sentAt >= TIMINGS.guardProbe;
   }
@@ -927,11 +973,21 @@ export class App {
       this.refreshStatus().catch(() => {});
       return;
     }
-    // On: an Off not answered yet is sent by the probe anyway; one answered "ok" is contradicted
-    // by an EVENT after that answer, or a read that left 2 s after it (okAt undefined: never).
-    if (listing && !(listing.sentAt >= guard.okAt + TIMINGS.listSettle)) {
+    if (!listing) {
+      // An EVENT "on" (the guard not in flight: after its "ok", or with no send of it waiting
+      // for an answer): turned on at the wall or in the app after the Off, which is never
+      // undone; the guard ends (every such EVENT ends it, on or off).
+      this.guards.delete(device.id);
+      this.logger.info(`deako: ${shortId(device.id)} turned on elsewhere, Off no longer held`);
+      this.saveSoon();
+      this.refreshStatus().catch(() => {});
       return;
     }
+    // On in a read, an Off not answered yet: sent by the probe anyway.
+    if (!guard.okSeen) return;
+    // A read that left 2 s after the "ok", no EVENT since (an EVENT would have ended the guard),
+    // still showing on: the Off was not applied.
+    if (!(listing.sentAt >= guard.okAt + TIMINGS.listSettle)) return;
     if (!guard.contradicted) {
       guard.contradicted = true;
       this.saveSoon();
@@ -995,21 +1051,23 @@ export class App {
    * with the LinkError (`sent` tells whether it left). A send counts as a try only once the
    * Connect answered it (ok, or an error but DEVICE_BUSY).
    */
-  sendGuard(guard, { deadline } = {}) {
+  sendGuard(guard) {
     const link = this.link;
     if (!link) return Promise.reject(new LinkError('network', { detail: 'no address' }));
-    if (guard.inFlight && !guard.userInFlight) return Promise.reject(new LinkError('late'));
+    // One send of a guard at a time.
+    if (guard.inFlight)
+      return Promise.reject(new LinkError('late', { detail: 'already in flight' }));
     guard.inFlight = true;
-    const mono = this.monotonic();
-    const end = deadline ?? mono + TIMINGS.connectTimeout + TIMINGS.commandTimeout;
     const { id } = guard;
     const message = controlRequest(id, { power: false });
     const background = !guard.userInFlight;
     return link
       .request(message, {
         priority: PRIORITY.PROTECTIVE,
-        deadline: end,
-        timeout: Math.max(0, end - mono),
+        // No deadline to leave: an Off waits for its turn however long the line (a scene of many
+        // Offs); only its answer is awaited TIMINGS.commandTimeout once it left.
+        deadline: Infinity,
+        timeout: TIMINGS.commandTimeout,
         beforeSend: () => {
           // A newer click on this device took its place: nothing leaves after it.
           if (this.guards.get(id) !== guard) throw new LinkError('late', { detail: 'superseded' });
@@ -1050,12 +1108,10 @@ export class App {
         throw err;
       })
       .finally(() => {
-        if (background) {
-          guard.inFlight = false;
-          this.saveSoon();
-          this.armProbe();
-          this.refreshStatus().catch(() => {});
-        }
+        guard.inFlight = false;
+        this.saveSoon();
+        this.armProbe();
+        this.refreshStatus().catch(() => {});
       });
   }
 
@@ -1081,16 +1137,20 @@ export class App {
   async protective(id, received) {
     this.cancelCommands(id);
     if (!this.link) {
-      if (!this.configLoaded) {
+      // The address known (typed, or kept in /data): at once; the configuration is awaited
+      // only when no address is known at all.
+      let address = this.config.address ?? addressOf(this.memory.address);
+      if (!address && !this.configLoaded) {
         this.askConfig();
         await this.waitReady(received + TIMINGS.configWait);
+        address = this.config.address;
       }
-      const address = this.config.address ?? addressOf(this.memory.address);
       if (address) this.useAddress(address);
     }
     if (!this.link) throw this.refusal(ERRORS.addressUnknown);
     this.seq += 1;
-    const guard = this.makeGuard({ id, seq: this.seq, inFlight: true });
+    const guard = this.makeGuard({ id, seq: this.seq, inFlight: false });
+    guard.userInFlight = true;
     this.guards.set(id, guard);
     // Written to /data without waiting: an Off never waits for the disk.
     this.saveSoon();
@@ -1098,31 +1158,50 @@ export class App {
     const answerBy = received + TIMINGS.commandAck + 800;
     const first = this.monotonic();
     let lastError;
+    let queued = false;
     for (;;) {
-      try {
-        await this.sendGuard(guard, { deadline: answerBy });
-        lastError = undefined;
+      const sent = this.sendGuard(guard).then(
+        () => ({}),
+        (error) => ({ error }),
+      );
+      let timer;
+      const outcome = await Promise.race([
+        sent,
+        new Promise((resolve) => {
+          timer = this.timers.setTimeout(
+            () => resolve({ late: true }),
+            Math.max(0, answerBy - this.monotonic()),
+          );
+        }),
+      ]);
+      this.timers.clearTimeout(timer);
+      if (outcome.late) {
+        // Still in line (or its answer awaited): it goes on, the ack is given now.
+        queued = true;
         break;
-      } catch (err) {
-        lastError = err;
-        const mono = this.monotonic();
-        if (
-          guard.left ||
-          !(err instanceof LinkError) ||
-          err.sent ||
-          this.guards.get(id) !== guard ||
-          mono - first >= TIMINGS.protectiveRetry ||
-          this.stopped
-        ) {
-          break;
-        }
-        await new Promise((resolve) => this.timers.setTimeout(resolve, TIMINGS.protectiveRetryGap));
-        if (this.guards.get(id) !== guard) break;
       }
+      lastError = outcome.error;
+      if (!lastError) break;
+      const mono = this.monotonic();
+      if (
+        !(lastError instanceof LinkError) ||
+        lastError.sent ||
+        this.guards.get(id) !== guard ||
+        mono - first >= TIMINGS.protectiveRetry ||
+        this.stopped
+      ) {
+        break;
+      }
+      await new Promise((resolve) => this.timers.setTimeout(resolve, TIMINGS.protectiveRetryGap));
+      if (this.guards.get(id) !== guard) break;
     }
-    guard.inFlight = false;
     guard.userInFlight = false;
     this.saveSoon();
+    if (queued) {
+      this.armProbe();
+      this.refreshStatus().catch(() => {});
+      throw this.refusal(guard.left ? ERRORS.offUnconfirmed : ERRORS.offQueued);
+    }
     if (!guard.left) {
       if (this.guards.get(id) !== guard) throw this.refusal(ERRORS.cancelledByStop);
       // Never abandoned: kept, sent every 10 s and as soon as a connection opens.
@@ -1145,7 +1224,8 @@ export class App {
     this.requestFollowUp();
     this.armProbe();
     this.refreshStatus().catch(() => {});
-    throw this.refusal(seen.last?.power === true ? ERRORS.offNotApplied : ERRORS.offUnconfirmed);
+    // On after the "ok": turned on again at the wall or in the app; the Off is no longer held.
+    throw this.refusal(seen.last?.power === true ? ERRORS.offOverridden : ERRORS.offUnconfirmed);
   }
 
   /** The commands of `id` not sent yet: dropped (an Off of the device was clicked). */
@@ -1436,7 +1516,8 @@ export class App {
     if (toAdd > 0) parts.push(T.toAdd(toAdd));
     for (const guard of this.guards.values()) {
       const name = this.nameOf(guard.id);
-      if (!this.canSend(guard)) parts.push(T.guardExhausted(name));
+      if (!this.link) parts.push(T.guardNoAddress(name));
+      else if (!this.canSend(guard)) parts.push(T.guardExhausted(name));
       else if (!guard.okSeen) parts.push(T.guardPending(name));
       else parts.push(T.guardWaiting(name, guard.tries));
     }

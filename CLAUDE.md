@@ -23,6 +23,7 @@ node --test test/off.test.js              # one file
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 node scripts/cover.mjs cover.png          # the store cover (800x534)
+memcap node scripts/mutants.mjs           # the guard mutants of test/mutants.mjs, one by one
 ```
 
 ## Architecture
@@ -45,8 +46,9 @@ test/                 node --test: fake Connect on a virtual clock, real TCP on 
 - **External ids are forever**: `ext:<selector>:light:<uuid>` with the uuid the
   Connect gives the device; feature keys `power`, `brightness`.
 - **An Off is never held back** (see the header of `src/app.js`): any change on
-  its path keeps a test that kills its mutant; no test may hang (every wait
-  bounded).
+  its path keeps a test that kills its mutant, listed in `test/mutants.mjs`
+  (`node scripts/mutants.mjs` must end with ALL KILLED); no test may hang (every
+  wait bounded).
 - **Order**: a full read that left before a command or an EVENT of a device
   never applies its state after them (`tick` / `mark`).
 - **Two clocks**: `monotonic` for every decision, `now` for /data only.

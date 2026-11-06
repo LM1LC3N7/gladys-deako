@@ -56,10 +56,18 @@ premier : avant les commandes en attente (il annule celles du même appareil),
 sans l’écart de 800 ms, en coupant une requête restée 1 s sans réponse, même
 avant la lecture de la configuration (vers l’adresse de la dernière session).
 
-S’il ne peut pas partir (le Connect ne répond pas), il est **gardé** (même après
-un redémarrage) et renvoyé toutes les 10 s et dès le retour de la connexion. Il
-prend fin quand l’appareil se montre éteint, quand une commande plus récente de
-cet appareil part, ou quand l’appareil est supprimé.
+Dans une scène de nombreux arrêts, chacun attend son tour sans l’écart de 800 ms
+(un à la fois) ; celui encore en file après 4,3 s le dit dans sa réponse et part
+quand même.
+
+S’il ne peut pas partir (le Connect ne répond pas, ou un autre client tient sa
+seule connexion), il est **gardé** (même après un redémarrage) et renvoyé toutes
+les 10 s, et aussitôt quand une connexion s’ouvre pour une autre commande.
+Accepté par le Connect, il est vérifié par une lecture 5 s plus tard et renvoyé
+10 s après son dernier envoi si cette lecture montre encore l’appareil allumé. Il
+prend fin quand l’appareil se montre éteint, quand l’appareil est rallumé au mur
+ou dans l’application (jamais défait), quand une commande plus récente de cet
+appareil part, ou quand l’appareil est supprimé.
 
 Un arrêt n’est refusé que si l’adresse du Connect n’est pas connue (aucune
 saisie, aucune d’une session précédente), ou remplacé par un clic plus récent

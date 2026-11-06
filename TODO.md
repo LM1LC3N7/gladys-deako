@@ -12,14 +12,35 @@ Handoff document: what is done, what was decided, what comes next.
       API.md 1.5, its fake_device and pydeako 0.6.0) and a real local TCP
       server on a real clock (x20). Never tested with a real device.
 
+- [x] **Review r1** (2026-11-05): REFUSÉ (4 importants, 7 mineurs); fixed: the Offs
+      of a big scene without a deadline to leave, an Off cut behind a silent Off
+      (I1); reads and pings never open a connection, the reconnection leaves the
+      held Offs to the 10 s probe (I2); an Off before the configuration goes at
+      once to the address of /data (I3); an EVENT "on" after the "ok" of an Off
+      ends it, never undone (I4); a hung save of /data no longer stops the next
+      ones (M2); docs (M3); ghost devices make room for listed ones, a device
+      removed from the Connect leaves Discover (M4); status of an Off held
+      without address (M5); mutants versioned (M7, `test/mutants.json`,
+      `node scripts/mutants.mjs`).
+
 ## Decisions
 
 - Version 0.1.0 set by hand (package.json, lock, manifest, docker_image).
 - Reference: pydeako 0.6.0 (MIT, Deako, last commit 2024-12-05) and
   local-integrations API.md 1.5 (MIT, Deako); licences read; ported to
   JavaScript, notices in `THIRD_PARTY_NOTICES.md`.
-- No mDNS discovery: the address of the Connect is typed (a container often
-  sees no multicast); the docs say how to find it.
+- No mDNS discovery in 0.1: the address of the Connect is typed; the docs say
+  how to find it. The SDK 0.16 mediated discovery (`network_discovery` mdns
+  `_telnet._tcp`, `scanNetwork('mdns')`, as gladys-lutron) is for 0.2 (Next).
+- Offs have no deadline to leave (only their answer is awaited 2 s once sent);
+  the ack is given at 4.3 s ("waiting in line" when still queued). An Off silent
+  for 1 s is cut when another Off waits behind it.
+- Only an Off or a command opens a connection; reads and pings waiting fail when
+  it closes. The reconnection timer leaves the held Offs to the probe (every
+  10 s), so a Connect whose single slot is taken is tried every 10 s at most.
+- An EVENT after the "ok" of an Off ends its guard: off = done; on = turned on
+  at the wall or in the app after the Off, never undone. Only a read that left
+  2 s after the "ok", no EVENT since, showing on, sends it again.
 - Identity: the uuid of each device (DEVICE_FOUND); the Connect checks it on
   every CONTROL (DEVICE_UNKNOWN). Over TCP the Connect gives no serial of its
   own, so a changed address is trusted (an Off goes there whatever answers).
@@ -45,6 +66,12 @@ Handoff document: what is done, what was decided, what comes next.
   `lighting`.
 
 ## Next
+
+- [ ] 0.2: mDNS discovery through the SDK (review r1, M6): an IP that changes in
+      DHCP cuts the integration until the address is typed again.
+- [ ] Real firmware order (review r1, M1): an EVENT before the "ok", or a device
+      already in the state asked (no EVENT), gives "sent, without confirmation";
+      accept an EVENT that left after the send if a real Connect shows it.
 
 - [ ] First test with a real Deako Connect (forum): port, message framing, EVENT
       after a CONTROL, DEVICE_BUSY frequency, the newer switches without local API.

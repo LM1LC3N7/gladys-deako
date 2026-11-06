@@ -154,20 +154,22 @@ test('accepted but still on: sent again 10 s apart, 4 answered tries at most, sa
   assert.equal(again.success, true, again.error);
 });
 
-test('an EVENT on after the Off answered: contradicted, sent again', async () => {
-  const { world, cmd, wait } = await setup();
+test('turned on at the wall after the Off was accepted (no EVENT of the Off): never undone', async () => {
+  const { world, cmd, wait, app, store } = await setup();
+  world.wall(LAMP, { power: false }); // already off: the Connect sends no EVENT for the Off
   world.ignoreControl = true;
   world.latency = (m) => {
-    if (m.type === 'CONTROL') world.later(() => world.wall(LAMP, { power: true }), 40);
+    if (m.type === 'CONTROL') world.later(() => world.wall(LAMP, { power: true }), 1500);
     return 20;
   };
   const ack = await cmd(F(LAMP, 'power'), 0);
-  assert.match(ack.error, /se montre encore allumé/);
+  assert.match(ack.error, /rallumé.*plus gardé/);
+  assert.equal(app.guards.size, 0);
   world.latency = 20;
-  world.ignoreControl = false;
-  await wait(11 * SECOND);
-  assert.deepEqual(world.controls(LAMP), [OFF, OFF]);
-  assert.equal(world.devices.get(LAMP).state.power, false);
+  await wait(2 * MINUTE);
+  assert.deepEqual(world.controls(LAMP), [OFF]);
+  assert.equal(world.devices.get(LAMP).state.power, true, 'the light the user turned on stays on');
+  assert.deepEqual(store.data.guards, []);
 });
 
 test('a read that left before the Off never contradicts it', async () => {
@@ -199,8 +201,10 @@ test('a read that left 2 s after the answer judges the Off: off ends it, on cont
   };
   await wait(10 * SECOND);
   await cmd(F(LAMP, 'power'), 0);
-  await wait(6 * SECOND);
+  await wait(5500); // the follow-up read: still on, no EVENT since the "ok"
   assert.equal(app.guards.get(LAMP).contradicted, true);
+  await wait(SECOND); // sent again 10 s after its send
+  assert.deepEqual(world.controls(LAMP), [OFF, OFF, OFF]);
 });
 
 test('a newer command of the device that left ends the Off held; refused, the Off stands', async () => {
@@ -422,13 +426,16 @@ test('a command clicked while the Off of its device is in flight is refused, nev
 });
 
 test('a contradicted Off is sent again 10 s after its last send, even when a connection opens', async () => {
-  const { world, cmd, wait } = await setup();
+  const { world, cmd, wait, app } = await setup();
   world.ignoreControl = true;
-  world.latency = (m) => {
-    if (m.type === 'CONTROL') world.later(() => world.wall(LAMP, { power: true }), 40);
-    return 20;
-  };
-  await cmd(F(LAMP, 'power'), 0); // contradicted at once; the ack takes ~4.3 s
+  await cmd(F(LAMP, 'power'), 0); // the ack takes ~4.3 s
+  const guard = app.guards.get(LAMP);
+  // A read that left 2 s after the "ok" shows it on: contradicted.
+  app.judgeGuard(app.devices.get(LAMP), true, {
+    tick: guard.sentTick + 1,
+    sentAt: guard.okAt + 2000,
+  });
+  assert.equal(guard.contradicted, true);
   world.dropAll(); // a new connection 5 s later (~9.3 s after the send)
   await wait(5300);
   assert.equal(world.open, 1);

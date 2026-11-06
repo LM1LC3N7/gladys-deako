@@ -12,7 +12,7 @@ import { controlRequest, listRequest, pingRequest } from '../src/protocol.js';
 import { LAMP, SWITCH, fakeDeako } from './helpers/fakeDeako.js';
 import { settle } from './helpers/app.js';
 
-function setupLink() {
+async function setupLink() {
   const clock = testClock();
   const world = fakeDeako({ clock });
   const messages = [];
@@ -39,11 +39,13 @@ function setupLink() {
     if (!out) throw new Error('did not settle');
     return out;
   };
+  // Only an Off or a command opens a connection: the app opens it for the reads (here, the test).
+  await run(link.open());
   return { clock, world, link, messages, closes, run };
 }
 
 test('one request in flight: the next leaves after the answer and 800 ms', async () => {
-  const { world, link, run } = setupLink();
+  const { world, link, run } = await setupLink();
   world.latency = 300;
   const a = link.request(pingRequest(), { priority: PRIORITY.READ });
   const b = link.request(pingRequest(), { priority: PRIORITY.READ });
@@ -57,7 +59,7 @@ test('one request in flight: the next leaves after the answer and 800 ms', async
 });
 
 test('an Off leaves without the gap, before the requests queued earlier', async () => {
-  const { world, link, run } = setupLink();
+  const { world, link, run } = await setupLink();
   await run(link.request(pingRequest()));
   const read = link.request(listRequest(), { priority: PRIORITY.READ });
   const off = link.request(controlRequest(LAMP, { power: false }), {
@@ -74,7 +76,7 @@ test('an Off leaves without the gap, before the requests queued earlier', async 
 });
 
 test('a stuck request is cut only when a more urgent one waits, after 1 s without a byte', async () => {
-  const { world, link, run, clock, closes } = setupLink();
+  const { world, link, run, clock, closes } = await setupLink();
   world.mute.add('DEVICE_LIST');
   const read = link.request(listRequest(), { priority: PRIORITY.READ, timeout: 20_000 });
   read.catch(() => {});
@@ -103,7 +105,7 @@ test('a stuck request is cut only when a more urgent one waits, after 1 s withou
 });
 
 test('a request receiving bytes is not cut; a command cuts a stuck read too', async () => {
-  const { world, link, run, clock, closes } = setupLink();
+  const { world, link, run, clock, closes } = await setupLink();
   world.mute.add('CONTROL');
   const slow = link.request(controlRequest(SWITCH, { power: true }), {
     priority: PRIORITY.COMMAND,
@@ -143,7 +145,7 @@ test('a request receiving bytes is not cut; a command cuts a stuck read too', as
 });
 
 test('not sent: deadline passed, beforeSend refusing, connection refused', async () => {
-  const { world, link, run, clock } = setupLink();
+  const { world, link, run, clock } = await setupLink();
   await run(link.request(pingRequest()));
   const late = await run(link.request(pingRequest(), { deadline: clock.monotonic() - 1 }));
   assert.equal(late.error.code, 'late');
@@ -166,7 +168,7 @@ test('not sent: deadline passed, beforeSend refusing, connection refused', async
 });
 
 test('answers: DEVICE_BUSY and other errors; a timeout is "sent"', async () => {
-  const { world, link, run } = setupLink();
+  const { world, link, run } = await setupLink();
   world.busy = 1;
   const busy = await run(link.request(controlRequest(LAMP, { power: false })));
   assert.equal(busy.error.code, 'busy');
@@ -182,7 +184,7 @@ test('answers: DEVICE_BUSY and other errors; a timeout is "sent"', async () => {
 });
 
 test('an answer of another request, or a late one, is not taken for ours', async () => {
-  const { world, link, run, messages } = setupLink();
+  const { world, link, run, messages } = await setupLink();
   world.latency = 2000;
   const first = link.request(pingRequest(), { timeout: 500 });
   assert.equal((await run(first)).error.code, 'timeout');
@@ -195,7 +197,7 @@ test('an answer of another request, or a late one, is not taken for ours', async
 });
 
 test('stop: queued and in flight rejected, nothing sent after', async () => {
-  const { world, link, run } = setupLink();
+  const { world, link, run } = await setupLink();
   world.mute.add('PING');
   const a = link.request(pingRequest());
   const b = link.request(pingRequest());

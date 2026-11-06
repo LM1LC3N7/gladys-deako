@@ -18,7 +18,8 @@ the notes of the version's GitHub Release.
   the wall or in the app shown at once, a full read every poll interval.
 - Offs (power 0, brightness 0) protective: never held back by a command or a
   read in flight, the 800 ms gap, a failed connection or the configuration not
-  read yet; kept in `/data` and sent again until the device shows them.
+  read yet; kept in `/data` and sent again every 10 s (4 answered tries at most)
+  until the device shows them; a light turned on again at the wall is left on.
 - A scene on many lights sets every light (one message every 800 ms, those of
   one device merged while waiting).
 - "Test the connection" button, Discover, connection status in English and

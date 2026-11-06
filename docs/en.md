@@ -53,10 +53,16 @@ commands waiting (it cancels those of the same device), without the 800 ms gap,
 cutting a request that has had no answer for 1 s, even before the
 configuration is read (to the address of the last session).
 
-When it cannot leave (the Connect does not answer), it is **kept** (also across
-a restart) and sent again every 10 s and as soon as the connection is back. It
-ends once the device shows it off, when a newer command of that device leaves,
-or when the device is deleted.
+In a scene of many Offs, each waits for its turn without the 800 ms gap (one at
+a time); one still in line after 4.3 s says so in its answer and still leaves.
+
+When it cannot leave (the Connect does not answer, or another client holds its
+only connection), it is **kept** (also across a restart) and sent again every
+10 s, and at once when a connection opens for another command. Accepted by the
+Connect, it is checked by a read 5 s later and sent again 10 s after its last
+send if that read still shows the device on. It ends once the device shows it
+off, when the device is turned on again at the wall or in the app (never undone),
+when a newer command of that device leaves, or when the device is deleted.
 
 An Off is refused only when the address of the Connect is not known (none typed
 and none from a previous session), or replaced by a newer click on the same
