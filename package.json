@@ -1,6 +1,6 @@
 {
   "name": "gladys-deako",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant integration for Deako smart light switches and dimmers through the local API of the Deako Connect.",
   "type": "module",

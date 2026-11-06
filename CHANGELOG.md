@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-06
+
 ### Added
 
 - Deako smart switches and dimmers through the local API of the Deako Connect
@@ -24,3 +26,6 @@ the notes of the version's GitHub Release.
   one device merged while waiting).
 - "Test the connection" button, Discover, connection status in English and
   French, user documentation.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-deako/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-deako/releases/tag/v0.1.1
