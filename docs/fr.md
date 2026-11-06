@@ -62,7 +62,10 @@ quand même.
 
 S’il ne peut pas partir (le Connect ne répond pas, ou un autre client tient sa
 seule connexion), il est **gardé** (même après un redémarrage) et renvoyé toutes
-les 10 s, et aussitôt quand une connexion s’ouvre pour une autre commande.
+les 10 s (un arrêt envoyé sans réponse : 10 s après cet envoi), aussitôt quand
+une connexion s’ouvre pour une autre commande s’il n’est jamais parti, et tous
+d’un coup quand le Connect répond de nouveau. Après des connexions fermées
+aussitôt ou sans un octet, la suivante attend 1 s, puis 2, 4, 8, jusqu’à 10 s.
 Accepté par le Connect, il est vérifié par une lecture 5 s plus tard et renvoyé
 10 s après son dernier envoi si cette lecture montre encore l’appareil allumé. Il
 prend fin quand l’appareil se montre éteint, quand l’appareil est rallumé au mur

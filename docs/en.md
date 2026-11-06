@@ -58,7 +58,10 @@ a time); one still in line after 4.3 s says so in its answer and still leaves.
 
 When it cannot leave (the Connect does not answer, or another client holds its
 only connection), it is **kept** (also across a restart) and sent again every
-10 s, and at once when a connection opens for another command. Accepted by the
+10 s (one sent without an answer: 10 s after that send), at once when a
+connection opens for another command if it was never sent, and all at once when
+the Connect answers again. After connections closed at once or without a byte,
+the next one waits 1 s, then 2, 4, 8, up to 10 s. Accepted by the
 Connect, it is checked by a read 5 s later and sent again 10 s after its last
 send if that read still shows the device on. It ends once the device shows it
 off, when the device is turned on again at the wall or in the app (never undone),

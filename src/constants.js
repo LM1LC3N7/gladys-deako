@@ -91,6 +91,9 @@ export const TIMINGS = {
   commandTimeout: 2 * SECOND,
   /** Between two non-protective messages (API.md 1.1); an Off never waits for it. */
   sendGap: 800,
+  /** After a connection that never got a byte: 1 s before the next one, doubled up to 10 s. */
+  reopenFirst: SECOND,
+  reopenMax: 10 * SECOND,
   /** A request in flight with no byte for this long is cut when a command or an Off waits. */
   stuck: SECOND,
   /** Failed connections: new tries 5 s, 15 s, 30 s, 1, 2 then 5 min. */

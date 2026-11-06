@@ -77,6 +77,9 @@ export class DeakoLink {
     this.conn = undefined;
     this.opening = undefined;
     this.closing = undefined;
+    /** Connections in a row that never got a byte, and when the last one was tried. */
+    this.deadStreak = 0;
+    this.lastConnectAt = -Infinity;
     this.connSeq = 0;
     this.queue = [];
     this.inFlight = undefined;
@@ -122,8 +125,21 @@ export class DeakoLink {
   /** The old connection closed first (its 'close' seen, 200 ms at most), then a new one. */
   async connectNow() {
     if (this.closing) await this.closing;
+    // After connections that never got a byte (refused, closed at once: the single slot of the
+    // Connect held by another client, or a silent Connect), the next one waits 1 s, then 2, 4,
+    // 8, up to 10 s, from the last try: whatever asks for it, an Off included.
+    const wait = this.reopenWait();
+    if (wait > 0) await new Promise((resolve) => this.timers.setTimeout(resolve, wait));
     if (this.stopped) throw new LinkError('stopped');
+    this.lastConnectAt = this.monotonic();
     return this.connectSocket();
+  }
+
+  /** The wait before the next connection (ms): 0 after a connection that got bytes. */
+  reopenWait() {
+    if (this.deadStreak === 0) return 0;
+    const pause = Math.min(TIMINGS.reopenFirst * 2 ** (this.deadStreak - 1), TIMINGS.reopenMax);
+    return Math.max(0, this.lastConnectAt + pause - this.monotonic());
   }
 
   connectSocket() {
@@ -140,6 +156,7 @@ export class DeakoLink {
         } catch {
           // already gone
         }
+        this.deadStreak += 1;
         try {
           this.onConnectError(err);
         } catch {
@@ -200,6 +217,9 @@ export class DeakoLink {
   drop(conn, reason) {
     if (!conn || conn.closed) return;
     conn.closed = true;
+    // Dead: nothing received, or requests sent and none answered (a Connect that only pushes
+    // EVENTs but never answers is no better than a silent one).
+    if (!conn.gotBytes || (conn.requested && !conn.gotAnswer)) this.deadStreak += 1;
     if (this.conn === conn) this.conn = undefined;
     // The next connection waits for this one to be closed (a Connect may serve one client).
     const closing = new Promise((resolve) => {
@@ -247,6 +267,9 @@ export class DeakoLink {
   onData(conn, chunk) {
     if (conn.closed) return;
     conn.lastByteAt = this.monotonic();
+    conn.gotBytes = true;
+    // Bytes on a connection we asked nothing yet: alive (an answer resets it too, in handle).
+    if (!conn.requested) this.deadStreak = 0;
     let lines;
     try {
       lines = conn.reader.push(chunk);
@@ -272,6 +295,8 @@ export class DeakoLink {
       typeof message.transactionId === 'string' &&
       message.transactionId === job.message.transactionId
     ) {
+      conn.gotAnswer = true;
+      this.deadStreak = 0;
       if (message.status === 'ok') {
         try {
           job.onAnswer?.(message);
@@ -430,6 +455,7 @@ export class DeakoLink {
         continue;
       }
       job.conn = conn;
+      conn.requested = true;
       job.sentAt = at;
       this.lastSendAt = at;
       this.inFlight = job;

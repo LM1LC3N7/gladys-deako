@@ -148,7 +148,7 @@ export const MUTANTS = [
   ),
   M(
     A,
-    'if (!guard.okSeen) return true;',
+    'if (!guard.okSeen) return !guard.left || mono - guard.sentAt >= TIMINGS.guardProbe * 0.9;',
     'if (!guard.okSeen) return false;',
     'app: Off never answered not sent again',
   ),
@@ -472,6 +472,68 @@ export const MUTANTS = [
     'if (isIP(host) === 4 && /^(0\\.|255\\.255\\.255\\.255$|22[4-9]\\.|23\\d\\.)/.test(host)) {',
     'if (false) {',
     'config: multicast/broadcast accepted',
+  ),
+  // --- Review r2: pauses of the connection, spacing of the Offs
+  M(
+    A,
+    'return !guard.left || mono - guard.sentAt >= TIMINGS.guardProbe * 0.9;',
+    'return true;',
+    'app: Off without answer sent again at every opening',
+  ),
+  M(
+    A,
+    'return !guard.left || mono - guard.sentAt >= TIMINGS.guardProbe * 0.9;',
+    'return mono - guard.sentAt >= TIMINGS.guardProbe * 0.9;',
+    'app: Off never sent waits 10 s',
+    'a guard never sent has sentAt -Infinity: the spacing alone already lets it go',
+  ),
+  M(
+    L,
+    'if (wait > 0) await new Promise((resolve) => this.timers.setTimeout(resolve, wait));',
+    '',
+    'link: no pause after dead connections',
+  ),
+  M(
+    L,
+    'if (!conn.gotBytes || (conn.requested && !conn.gotAnswer)) this.deadStreak += 1;',
+    '',
+    'link: a connection closed at accept not counted',
+  ),
+  M(
+    L,
+    '      conn.gotAnswer = true;\n      this.deadStreak = 0;',
+    '      conn.gotAnswer = true;',
+    'link: pause kept after a live connection',
+  ),
+  M(
+    L,
+    'const pause = Math.min(TIMINGS.reopenFirst * 2 ** (this.deadStreak - 1), TIMINGS.reopenMax);',
+    'const pause = TIMINGS.reopenFirst;',
+    'link: pause never grows',
+  ),
+  M(
+    A,
+    '      this.sendPendingGuards({ now: true });',
+    '',
+    'app: Offs held not sent when the Connect answers again',
+  ),
+  M(
+    A,
+    'if (answered && !conn.answered) {',
+    'if (!conn.answered) {',
+    'app: an EVENT sends every Off held at once',
+  ),
+  M(
+    A,
+    'sentAt: accepted ? this.monotonic() : -Infinity,',
+    'sentAt: -Infinity,',
+    'app: restored accepted Off sent at once',
+  ),
+  M(
+    L,
+    'if (!conn.gotBytes || (conn.requested && !conn.gotAnswer)) this.deadStreak += 1;',
+    'if (!conn.gotBytes) this.deadStreak += 1;',
+    'link: EVENTs without answers count as alive',
   ),
   // --- Constants
   M(K, 'stuck: SECOND,', 'stuck: 10 * SECOND,', 'const: cut after 10 s'),

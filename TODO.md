@@ -20,8 +20,17 @@ Handoff document: what is done, what was decided, what comes next.
       ends it, never undone (I4); a hung save of /data no longer stops the next
       ones (M2); docs (M3); ghost devices make room for listed ones, a device
       removed from the Connect leaves Discover (M4); status of an Off held
-      without address (M5); mutants versioned (M7, `test/mutants.json`,
+      without address (M5); mutants versioned (M7, `test/mutants.mjs`,
       `node scripts/mutants.mjs`).
+
+- [x] **Review r2** (2026-11-06): REFUSÉ (N1 important, N2 mineur); fixed: after
+      connections that never got a byte (refused, closed at accept, the single
+      slot held by another client), the next one waits 1 s doubled up to 10 s,
+      whatever asks for it (an Off included); an Off sent without an answer is
+      sent again 10 s after that send at the earliest; the Offs held go all at
+      once when the Connect answers a request again (N1, N2). Tests with 1, 2
+      and 5 Offs held against a taken slot and a silent Connect
+      (`test/review2.test.js`).
 
 ## Decisions
 
@@ -37,7 +46,10 @@ Handoff document: what is done, what was decided, what comes next.
   for 1 s is cut when another Off waits behind it.
 - Only an Off or a command opens a connection; reads and pings waiting fail when
   it closes. The reconnection timer leaves the held Offs to the probe (every
-  10 s), so a Connect whose single slot is taken is tried every 10 s at most.
+  10 s). After connections that never got a byte, the next one waits 1 s,
+  doubled up to 10 s (an Off included); an Off sent without an answer goes again
+  10 s after that send at the earliest, and all the held Offs go at once when
+  the Connect answers a request again.
 - An EVENT after the "ok" of an Off ends its guard: off = done; on = turned on
   at the wall or in the app after the Off, never undone. Only a read that left
   2 s after the "ok", no EVENT since, showing on, sends it again.
@@ -69,6 +81,9 @@ Handoff document: what is done, what was decided, what comes next.
 
 - [ ] 0.2: mDNS discovery through the SDK (review r1, M6): an IP that changes in
       DHCP cuts the integration until the address is typed again.
+- [ ] A dimmer going down may push an intermediate EVENT "on" (a lower brightness)
+      after the "ok" of an Off: that EVENT ends the guard (taken for a light
+      turned on elsewhere); check on hardware (review r2).
 - [ ] Real firmware order (review r1, M1): an EVENT before the "ok", or a device
       already in the state asked (no EVENT), gives "sent, without confirmation";
       accept an EVENT that left after the send if a real Connect shows it.

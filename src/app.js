@@ -607,8 +607,15 @@ export class App {
   }
 
   /** The Connect answered on this connection: it is alive. */
-  markAlive(conn) {
-    if (!conn || conn.closed || conn.alive) return;
+  markAlive(conn, { answered = false } = {}) {
+    if (!conn || conn.closed) return;
+    if (answered && !conn.answered) {
+      conn.answered = true;
+      // The Connect answers our requests again (not only pushes EVENTs): the Offs held
+      // unanswered go now, without their 10 s spacing.
+      this.sendPendingGuards({ now: true });
+    }
+    if (conn.alive) return;
     conn.alive = true;
     this.failures = 0;
     this.lastReason = undefined;
@@ -671,7 +678,7 @@ export class App {
     const link = this.link;
     try {
       await link.request(pingRequest(), { priority: PRIORITY.READ });
-      this.markAlive(conn);
+      this.markAlive(conn, { answered: true });
       return true;
     } catch (err) {
       if (err instanceof LinkError && err.code === 'timeout' && this.conn === conn) {
@@ -755,7 +762,7 @@ export class App {
           }, wait);
         },
       })
-      .then(() => this.markAlive(conn))
+      .then(() => this.markAlive(conn, { answered: true }))
       .catch((err) => {
         if (!this.listing || this.listing.conn !== conn) this.listBusy = false;
         if (err instanceof LinkError && err.code === 'timeout' && this.conn === conn) {
@@ -930,7 +937,8 @@ export class App {
       okAt: accepted ? -Infinity : undefined,
       unanswered: false,
       contradicted: false,
-      sentAt: -Infinity,
+      // Accepted before a restart: its last send counts as now (sent again 10 s later at the earliest).
+      sentAt: accepted ? this.monotonic() : -Infinity,
       sentTick: 0,
       /** Reads asked to judge it since its last "ok" (3 at most). */
       checks: 0,
@@ -953,7 +961,9 @@ export class App {
   /** Due for a send: never answered "ok" (pending), or contradicted 10 s after its last send. */
   due(guard, mono) {
     if (guard.inFlight || guard.userInFlight || !this.canSend(guard)) return false;
-    if (!guard.okSeen) return true;
+    // Never sent: at once. Sent without an answer (no answer, cut, busy): 10 s after that send
+    // at the earliest, whatever opens a connection meanwhile (a little early for the probe).
+    if (!guard.okSeen) return !guard.left || mono - guard.sentAt >= TIMINGS.guardProbe * 0.9;
     return guard.contradicted && mono - guard.sentAt >= TIMINGS.guardProbe;
   }
 
@@ -1039,10 +1049,12 @@ export class App {
   }
 
   /** The Offs never answered "ok" (or contradicted and due): sent now, before any read. */
-  sendPendingGuards() {
+  sendPendingGuards({ now = false } = {}) {
     const mono = this.monotonic();
     for (const guard of this.guards.values()) {
-      if (this.due(guard, mono)) this.sendGuard(guard).catch(() => {});
+      const pending =
+        now && !guard.okSeen && !guard.inFlight && !guard.userInFlight && this.canSend(guard);
+      if (pending || this.due(guard, mono)) this.sendGuard(guard).catch(() => {});
     }
   }
 
@@ -1091,7 +1103,7 @@ export class App {
         },
       })
       .then((answer) => {
-        this.markAlive(this.conn);
+        this.markAlive(this.conn, { answered: true });
         if (background) this.requestFollowUp();
         return answer;
       })
@@ -1346,7 +1358,7 @@ export class App {
         },
       })
       .then(async () => {
-        this.markAlive(this.conn);
+        this.markAlive(this.conn, { answered: true });
         const seen = await entry.watching;
         if (seen.done) {
           entry.settle();

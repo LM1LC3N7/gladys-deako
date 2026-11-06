@@ -385,10 +385,12 @@ test('a device deleted while its Off waits for a connection: nothing leaves', as
   world.dropAll();
   await wait(100);
   await cmd(F(LAMP, 'power'), 0);
-  await wait(9 * SECOND); // the tries of the connection fail meanwhile (next one in 30 s)
   world.refuse = false;
   world.connectDelay = 1500;
-  await wait(1500); // the probe (10 s): a connection opening for the Off
+  // The next try (the probe): a connection opening for the Off, 1.5 s long.
+  const tries = world.attempts;
+  for (let i = 0; i < 300 && world.attempts === tries; i += 1) await wait(100);
+  assert.equal(world.attempts, tries + 1);
   assert.equal(world.open, 0);
   await act(gladys.fake.deviceDeleted(created(LAMP)));
   await wait(5 * SECOND);
@@ -411,7 +413,7 @@ test('the quick tries of an Off do not stretch the pause of the connection', asy
   world.dropAll();
   await wait(100);
   await cmd(F(LAMP, 'power'), 0);
-  assert.ok(app.failures <= 2, `${app.failures} failures`);
+  assert.ok(app.failures <= 1, `${app.failures} failures`);
 });
 
 test('a command clicked while the Off of its device is in flight is refused, never sent', async () => {
